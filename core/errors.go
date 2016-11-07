@@ -42,8 +42,6 @@ func isTemporary(info errorInfo, err error) bool {
 		return true
 	case "CH001": // request timed out
 		return true
-	case "CH761": // outputs currently reserved
-		return true
 	case "CH706": // 1 or more action errors
 		errs := errors.Data(err)["actions"].([]detailedError)
 		temp := true
