@@ -94,9 +94,66 @@ func TestSighashCheck(t *testing.T) {
 // source, and then building two different txs with that same source,
 // but destinations w/ different addresses.
 func TestConflictingTxsInPool(t *testing.T) {
-	// TODO(jackson): Figure out a proper interface to be able
-	// to cancel the reservation.
-	t.Skip()
+	_, db := pgtest.NewDB(t, pgtest.SchemaPath)
+	ctx := context.Background()
+	info, err := bootdb(ctx, db, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = issue(ctx, t, info, info.acctA.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dumpState(ctx, t, db)
+	prottest.MakeBlock(t, info.Chain)
+	dumpState(ctx, t, db)
+	<-info.pinStore.WaitForPin(account.PinName, info.Chain.Height())
+
+	assetAmount := bc.AssetAmount{
+		AssetID: info.asset.AssetID,
+		Amount:  10,
+	}
+	spendAction := info.NewSpendAction(assetAmount, info.acctA.ID, nil, nil)
+	dest1 := info.NewControlAction(assetAmount, info.acctB.ID, nil)
+
+	// Build the first tx
+	firstTemplate, err := Build(ctx, nil, []Action{spendAction, dest1}, time.Now().Add(time.Minute))
+	if err != nil {
+		testutil.FatalErr(t, err)
+	}
+	unsignedTx := *firstTemplate.Transaction
+	coretest.SignTxTemplate(t, ctx, firstTemplate, &info.privKeyAccounts)
+	tx := bc.NewTx(*firstTemplate.Transaction)
+	err = FinalizeTx(ctx, info.Chain, tx)
+	if err != nil {
+		testutil.FatalErr(t, err)
+	}
+
+	// Slighly tweak the first tx so it has a different hash, but
+	// still consumes the same UTXOs.
+	unsignedTx.MaxTime++
+	secondTemplate := &Template{
+		Transaction:         &unsignedTx,
+		SigningInstructions: firstTemplate.SigningInstructions,
+		Local:               true,
+	}
+	coretest.SignTxTemplate(t, ctx, secondTemplate, &info.privKeyAccounts)
+	err = FinalizeTx(ctx, info.Chain, bc.NewTx(*secondTemplate.Transaction))
+	if err != nil {
+		testutil.FatalErr(t, err)
+	}
+
+	// Make a block, which should reject one of the txs.
+	dumpState(ctx, t, db)
+	b := prottest.MakeBlock(t, info.Chain)
+	<-info.pinStore.WaitForPin(account.PinName, info.Chain.Height())
+
+	dumpState(ctx, t, db)
+	if len(b.Transactions) != 1 {
+		t.Errorf("got block.Transactions = %#v\n, want exactly one tx", b.Transactions)
+	}
 }
 
 func TestTransferConfirmed(t *testing.T) {
